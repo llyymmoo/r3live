@@ -226,6 +226,138 @@ void r3live_map_to_mvs_scene( Offline_map_recorder &r3live_map_recorder, MVS::Im
     cout << "Total available points number " << point_index << endl;
 }
 
+void fastlio_map_to_mvs_scene( Offline_map_recorder &r3live_map_recorder, MVS::ImageArr &m_images, MVS::PointCloud &m_pointcloud )
+{
+    vec_3   last_pose_t = vec_3( -100, 0, 0 );
+    eigen_q last_pose_q = eigen_q( 1, 0, 0, 1 );
+    int     m_image_id = 0;
+    int     number_of_image_frame = r3live_map_recorder.m_pts_in_views_vec.size();
+    cout << "Number of image frames: " << number_of_image_frame << endl;
+
+    Eigen::Matrix3d camera_intrinsic;
+    int             image_width = r3live_map_recorder.m_image_pose_vec[ 0 ]->m_img_cols;
+    int             image_heigh = r3live_map_recorder.m_image_pose_vec[ 0 ]->m_img_rows;
+    double          fx = r3live_map_recorder.m_image_pose_vec[ 0 ]->fx;
+    double          fy = r3live_map_recorder.m_image_pose_vec[ 0 ]->fy;
+    double          cx = r3live_map_recorder.m_image_pose_vec[ 0 ]->cx;
+    double          cy = r3live_map_recorder.m_image_pose_vec[ 0 ]->cy;
+    camera_intrinsic << fx / image_width, 0, cx / image_width, 0, fy / image_width, cy / image_width, 0, 0, 1;
+    // camera_intrinsic << fx , 0, cx , 0, fy , cy , 0, 0, 1;
+    cout << "Iamge resolution  = " << r3live_map_recorder.m_image_pose_vec[ 0 ]->m_img_cols << " X " << r3live_map_recorder.m_image_pose_vec[ 0 ]->m_img_rows << endl;
+    // cout << "Camera intrinsic: \r\n" << camera_intrinsic << endl;
+
+    MVS::Platform m_platforms = MVS::Platform();
+    m_platforms.name = std::string( "platfrom" );
+    m_platforms.cameras.push_back( MVS::Platform::Camera() );
+    m_platforms.cameras[ 0 ].K = camera_intrinsic;
+    m_platforms.cameras[ 0 ].R = Eigen::Matrix3d::Identity();
+    m_platforms.cameras[ 0 ].C = Eigen::Vector3d::Zero();
+
+    std::unordered_map< std::shared_ptr< RGB_pts >, std::vector< int > > m_pts_with_view;
+    for ( int frame_idx = 0; frame_idx < number_of_image_frame; frame_idx++ )
+    {
+        std::shared_ptr< Image_frame > img_ptr = r3live_map_recorder.m_image_pose_vec[ frame_idx ];
+        vec_3                              pose_t = -img_ptr->m_pose_c2w_q.toRotationMatrix().transpose() * img_ptr->m_pose_c2w_t;
+        if ( ( pose_t - last_pose_t ).norm() < g_add_keyframe_t && ( img_ptr->m_pose_c2w_q.angularDistance( last_pose_q ) * 57.3 < g_add_keyframe_R ) )
+        {
+            continue;
+        }
+        MVS::Platform::Pose pose;
+        MVS::Image          image;
+
+        pose.R = img_ptr->m_pose_c2w_q.toRotationMatrix();
+        pose.C = pose_t;
+        last_pose_t = pose_t;
+        last_pose_q = img_ptr->m_pose_c2w_q;
+        m_platforms.poses.push_back( pose );
+        // cout << "[ " << frame_idx << " ]: q = " << img_ptr->m_pose_c2w_q.coeffs().transpose() << " | "<< pose_t.transpose() << endl;
+
+        image.ID = m_image_id;
+        m_image_id++;
+        image.poseID = image.ID;
+        image.platformID = 0;
+        image.cameraID = 0;
+        image.width = img_ptr->m_img_cols;
+        image.height = img_ptr->m_img_rows;
+        image.camera = Camera( m_platforms.GetCamera( image.cameraID, image.poseID ) );
+
+        // compute the unnormalized camera
+        image.camera.K = image.camera.GetK< REAL >( image_width, image_heigh );
+        image.camera.ComposeP();
+        m_images.push_back( image );
+
+        for ( int pt_idx = 0; pt_idx < r3live_map_recorder.m_pts_in_views_vec[ frame_idx ].size(); pt_idx++ )
+        {
+            m_pts_with_view[ r3live_map_recorder.m_pts_in_views_vec[ frame_idx ][ pt_idx ] ].push_back( image.ID  );
+        }
+        cout << ANSI_DELETE_CURRENT_LINE;
+        printf( "\33[2K\rAdd frames: %u%%, total_points = %u ...", frame_idx * 100 / ( number_of_image_frame - 1 ), m_pts_with_view.size() );
+        ANSI_SCREEN_FLUSH;
+    }
+    cout << endl;
+    cout << "Number of image frames: " << m_image_id << endl;
+    cout << "Number of points " << m_pts_with_view.size() << endl;
+
+    int acc_count = 0;
+    m_pointcloud.points.resize( m_pts_with_view.size() );
+    m_pointcloud.pointViews.resize( m_pts_with_view.size() );
+    m_pointcloud.colors.resize( m_pts_with_view.size() );
+    long point_index = 0;
+    long temp_int = 0;
+    if(pcl_pc_rgb == nullptr)
+    {
+        pcl_pc_rgb = boost::make_shared<pcl::PointCloud<PointType>>();
+    }
+    pcl_pc_rgb->clear();
+    pcl_pc_rgb->reserve(1e8);
+    for ( std::unordered_map< std::shared_ptr< RGB_pts >, std::vector< int > >::iterator it = m_pts_with_view.begin(); it != m_pts_with_view.end(); it++ )
+    {
+        if ( ( it->second.size() >= 0 ) )
+        {
+            acc_count++;
+            MVS::PointCloud::Point    pt3d;
+            MVS::PointCloud::ViewArr  pt_view_arr;
+            MVS::PointCloud::ColorArr color_arr;
+            MVS::PointCloud::Color    color;
+            vec_3                     pt_pos = ( ( it->first ) )->get_pos();
+            pt3d.x = pt_pos( 0 );
+            pt3d.y = pt_pos( 1 );
+            pt3d.z = pt_pos( 2 );
+            color.r = 0;
+            color.g = 0;
+            color.b = 0;
+            PointType pcl_pt ;
+            pcl_pt.x = pt3d.x;
+            pcl_pt.y = pt3d.y;
+            pcl_pt.z = pt3d.z;
+            pcl_pt.r = color.r;
+            pcl_pt.g = color.g;
+            pcl_pt.b = color.b;
+            pcl_pc_rgb->points.push_back(pcl_pt);
+            for ( auto _idx : it->second )
+            {
+                pt_view_arr.push_back( _idx );
+            }
+            m_pointcloud.points[ point_index ] = pt3d;
+            m_pointcloud.pointViews[ point_index ] = pt_view_arr;
+            m_pointcloud.colors[ point_index ] = color;
+            point_index++;
+            if ( ( temp_int + 1 ) % ( m_pts_with_view.size() / 10 ) == 0 )
+            {
+                printf( "\33[2K\rRetring points: %u%% ...", temp_int * 10 / ( m_pts_with_view.size() / 10 ) );
+                ANSI_SCREEN_FLUSH;
+            }
+        }
+        temp_int++;
+    }
+    printf( "\33[2K\rRetriving points: %u%% ...", 100 );
+    m_pointcloud.points.resize( point_index );
+    m_pointcloud.pointViews.resize( point_index );
+    m_pointcloud.colors.resize( point_index );
+    cout << endl;
+    cout << "Total available points number " << point_index << endl;
+}
+
 
 void build_pcl_kdtree( Offline_map_recorder &r3live_map_recorder )
 {
@@ -266,7 +398,7 @@ void reconstruct_mesh( Offline_map_recorder &r3live_map_recorder, std::string ou
     MVS::PointCloud m_pointcloud;
     MVS::Mesh       reconstructed_mesh;
 
-    r3live_map_to_mvs_scene( r3live_map_recorder, m_images, m_pointcloud );
+    fastlio_map_to_mvs_scene( r3live_map_recorder, m_images, m_pointcloud );
     // return;
     
     ReconstructMesh( g_insert_pt_dis, g_if_use_free_space_support, 4, g_thickness_factor, g_quality_factor, reconstructed_mesh, m_images, m_pointcloud );
@@ -381,6 +513,7 @@ int main( int argc, char **argv )
 
     Global_map       global_map( 0 );
     Offline_map_recorder r3live_map_recorder;
+    g_offline_map_name = "/home/lym/res/mvs/test.r3live";
     cout << "Open file from: " << g_offline_map_name << endl;
     global_map.m_if_reload_init_voxel_and_hashed_pts = 0;
     r3live_map_recorder.m_global_map = &global_map;
@@ -389,12 +522,13 @@ int main( int argc, char **argv )
     
     cout << "Number of rgb points: " << global_map.m_rgb_pts_vec.size() << endl;
     cout << "Size of frames: " << r3live_map_recorder.m_image_pose_vec.size() << endl;
+    g_working_dir = "/home/lym/res/mvs";
     reconstruct_mesh( r3live_map_recorder, g_working_dir );
     cout << "=== Reconstruct mesh finish ! ===" << endl;
 
-    std::string input_mesh_name = std::string( g_working_dir ).append( "/reconstructed_mesh.obj" );
-    std::string output_mesh_name = std::string( g_working_dir ).append( "/textured_mesh.ply" );
-    texture_mesh(r3live_map_recorder, input_mesh_name, output_mesh_name, g_texturing_smooth_factor );
+    // std::string input_mesh_name = std::string( g_working_dir ).append( "/reconstructed_mesh.obj" );
+    // std::string output_mesh_name = std::string( g_working_dir ).append( "/textured_mesh.ply" );
+    // texture_mesh(r3live_map_recorder, input_mesh_name, output_mesh_name, g_texturing_smooth_factor );
 
     exit(0);
     return 0;

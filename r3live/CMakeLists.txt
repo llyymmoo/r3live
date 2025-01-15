@@ -12,6 +12,7 @@ add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
 
 # Add OpenCV if available
 # set(OpenCV_DIR "/home/zivlin/opt/opencv/build")
+set(Boost_DIR "/home/lym/Software/boost/lib")
 FIND_PACKAGE(Boost REQUIRED COMPONENTS filesystem iostreams program_options system serialization)
 if(Boost_FOUND)
 	INCLUDE_DIRECTORIES(${Boost_INCLUDE_DIRS})
@@ -24,7 +25,7 @@ find_package(catkin REQUIRED COMPONENTS
                     geometry_msgs
                     nav_msgs
                     tf
-                    cv_bridge
+                    cv_bridge_1
                     livox_ros_driver
             )
 
