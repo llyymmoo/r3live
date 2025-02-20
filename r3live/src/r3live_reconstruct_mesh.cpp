@@ -64,6 +64,8 @@ Dr. Fu Zhang < fuzhang@hku.hk >.
 #include "tools_mem_used.h"
 #include "tools_logger.hpp"
 #include "tools_ros.hpp"
+
+#include <chrono>
 // #include ""
 // cv::RNG g_rng = cv::RNG(0);
 Common_tools::Cost_time_logger              g_cost_time_logger;
@@ -401,6 +403,7 @@ void reconstruct_mesh( Offline_map_recorder &r3live_map_recorder, std::string ou
     fastlio_map_to_mvs_scene( r3live_map_recorder, m_images, m_pointcloud );
     // return;
     
+    auto start = std::chrono::high_resolution_clock::now();
     ReconstructMesh( g_insert_pt_dis, g_if_use_free_space_support, 4, g_thickness_factor, g_quality_factor, reconstructed_mesh, m_images, m_pointcloud );
     printf( "Mesh reconstruction completed: %u vertices, %u faces\n", reconstructed_mesh.vertices.GetSize(), reconstructed_mesh.faces.GetSize() );
     
@@ -415,8 +418,12 @@ void reconstruct_mesh( Offline_map_recorder &r3live_map_recorder, std::string ou
                                                              // remove non-manifold
                                                              // problems created by
                                                              // closing holes
+    auto end = std::chrono::high_resolution_clock::now();
     reconstructed_mesh.Save( MAKE_PATH_SAFE( Util::getFileFullName( output_dir ) ) + _T("/reconstructed_mesh") + ".ply" );
     reconstructed_mesh.Save( MAKE_PATH_SAFE( Util::getFileFullName( output_dir ) ) + _T("/reconstructed_mesh") + ".obj" );
+
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Function took " << duration.count() << " milliseconds to execute." << std::endl;
 }
 
 void texture_mesh(  Offline_map_recorder &r3live_map_recorder, std::string input_mesh_name, std::string output_mesh_name, int smooth_factor  )
@@ -513,7 +520,7 @@ int main( int argc, char **argv )
 
     Global_map       global_map( 0 );
     Offline_map_recorder r3live_map_recorder;
-    g_offline_map_name = "/home/lym/res/mvs/test.r3live";
+    g_offline_map_name = "/home/lym/res/depth_mvs/test.r3live";
     cout << "Open file from: " << g_offline_map_name << endl;
     global_map.m_if_reload_init_voxel_and_hashed_pts = 0;
     r3live_map_recorder.m_global_map = &global_map;
@@ -522,7 +529,7 @@ int main( int argc, char **argv )
     
     cout << "Number of rgb points: " << global_map.m_rgb_pts_vec.size() << endl;
     cout << "Size of frames: " << r3live_map_recorder.m_image_pose_vec.size() << endl;
-    g_working_dir = "/home/lym/res/mvs";
+    g_working_dir = "/home/lym/res/depth_mvs";
     reconstruct_mesh( r3live_map_recorder, g_working_dir );
     cout << "=== Reconstruct mesh finish ! ===" << endl;
 
